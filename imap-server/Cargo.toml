@@ -1,0 +1,12 @@
+[package]
+name = "imap-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+imap-core = { path = "../imap-core" }
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+rustls = "0.23"
+async-trait = "0.1"
+tracing = "0.1"

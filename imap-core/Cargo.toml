@@ -1,0 +1,13 @@
+[package]
+name = "imap-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["io-util", "sync"] }
+
+[dev-dependencies]
+# Enables #[tokio::test] (macros) and the current-thread runtime (rt) for the
+# codec unit tests. io-util is unified from [dependencies]. dev-deps are not
+# included in release/cross-compiled builds, so this does not affect yggmail-ng.
+tokio = { version = "1", features = ["macros", "rt", "io-util"] }
