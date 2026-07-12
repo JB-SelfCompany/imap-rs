@@ -2,6 +2,14 @@ use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use crate::error::{ImapError, ImapResult};
 
+/// Maximum byte count accepted for a single IMAP literal (`{N}` or `{N+}`).
+///
+/// 35 MiB comfortably exceeds yggmail-ng's 32 MiB per-message cap while
+/// blocking multi-GB allocation DoS: a client advertising `LITERAL+` can
+/// send `{4294967295+}\r\n` and the server would otherwise `vec![0u8; 4 GiB]`
+/// before reading a single payload byte.
+const MAX_LITERAL_SIZE: u64 = 35 * 1024 * 1024;
+
 // ── Atom helpers ────────────────────────────────────────────────────
 
 pub fn is_atom_char(ch: u8) -> bool {
@@ -318,7 +326,27 @@ impl<R: tokio::io::AsyncRead + Unpin> AsyncDecoder<R> {
         if !self.accept_byte(b'{').await? {
             return Err(ImapError::bad("expected '{'"));
         }
-        let size = self.read_number64().await? as u64;
+        // read_number64 returns i64 (allows a leading '-' in the grammar).
+        // A negative value is always malformed; a positive value exceeding
+        // MAX_LITERAL_SIZE is a DoS attempt.  Both cases must close the
+        // connection rather than return a recoverable BAD:
+        //
+        //   For a LITERAL+ (non-sync) literal the client has already queued
+        //   `size` payload bytes on the wire without waiting for a `+` prompt.
+        //   If we return a mere BAD the serve loop calls discard_line() which
+        //   reads until '\n' — it would consume one line of the queued payload
+        //   and then try to parse the rest as the next command, de-syncing the
+        //   stream permanently.  ImapError::Closed causes serve() to break
+        //   immediately, which is the only safe outcome.
+        //
+        //   For a synchronising literal the client is waiting for our `+`
+        //   continuation before sending payload.  We haven't sent one, so
+        //   there are no queued bytes to de-sync on — but closing is still
+        //   the correct policy: an oversized synchronising literal is a
+        //   protocol error the client cannot legitimately recover from mid-
+        //   session, and a clean close is clearer than a BAD that leaves the
+        //   session open with an ambiguous state.
+        let raw_size = self.read_number64().await?;
         let non_sync = self.accept_byte(b'+').await?;
         let cb = self.read_byte().await?;
         if cb != b'}' { return Err(ImapError::bad("expected '}'")); }
@@ -326,9 +354,13 @@ impl<R: tokio::io::AsyncRead + Unpin> AsyncDecoder<R> {
         let lf = self.read_byte().await?;
         if cr != b'\r' || lf != b'\n' { return Err(ImapError::bad("expected CRLF after literal")); }
 
-        let mut data = vec![0u8; size as usize];
+        if raw_size < 0 || raw_size as u64 > MAX_LITERAL_SIZE {
+            return Err(ImapError::Closed);
+        }
+        let size = raw_size as usize;
+        let mut data = vec![0u8; size];
         self.inner.read_exact(&mut data).await?;
-        self.read_bytes += size;
+        self.read_bytes += size as u64;
         Ok((data, non_sync))
     }
 

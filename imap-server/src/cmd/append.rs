@@ -124,12 +124,8 @@ async fn read_flag_list(conn: &mut Conn) -> Result<Vec<Flag>, ImapError> {
             // Check if next is a date or literal
             let next = conn.decoder.read_byte().await;
             match next {
-                Ok(b'"') | Ok(b'{') => {
-                    conn.decoder.unread_byte(next.unwrap());
-                    // Put back the SP too? No, we already consumed it.
-                    // Actually we need the date/literal to follow, which is fine.
-                    // But we consumed the SP between flags and date/literal.
-                    // That's OK.
+                Ok(b @ (b'"' | b'{')) => {
+                    conn.decoder.unread_byte(b);
                 }
                 Ok(b) => conn.decoder.unread_byte(b),
                 Err(_) => {}

@@ -1,4 +1,8 @@
+<div align="center">
+
 # imap-rs
+
+</div>
 
 An IMAP4rev1 server in Rust: a wire-level protocol library (`imap-core`) and an
 async server framework (`imap-server`). A port of [go-imap v2][goimap] to Tokio.
@@ -69,6 +73,13 @@ All states ──LOGOUT──▶ Logout
 Enforced by `require_auth` / `require_selected`, which return `BAD` when violated.
 
 ## Build & test
+
+Requirements:
+
+- **Rust** stable — install via [rustup](https://rustup.rs)
+- **A C compiler and CMake** — `imap-server` pulls `rustls`/`tokio-rustls`, whose
+  default `aws-lc-rs` crypto backend builds native code (on Windows also install NASM).
+  `imap-core` alone (tokio only) needs no C toolchain.
 
 ```bash
 cargo build -p imap-core -p imap-server
