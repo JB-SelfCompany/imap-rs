@@ -1,1 +1,6 @@
 /target/
+
+# Local AI-tool files
+.claude/
+.omc/
+CLAUDE.md
