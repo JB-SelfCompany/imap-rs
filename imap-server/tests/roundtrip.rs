@@ -65,7 +65,15 @@ impl UserSession for TestSession {
         })
     }
     async fn close(&mut self) -> Result<(), ImapError> { self.selected = None; Ok(()) }
-    async fn fetch(&mut self, _: bool, _: &SeqSet, _: &FetchOptions) -> Result<Vec<FetchedMessage>, ImapError> { Ok(vec![]) }
+    async fn fetch(&mut self, _: bool, _: &SeqSet, _: &FetchOptions) -> Result<Vec<FetchedMessage>, ImapError> {
+        // One fixed message so FETCH responses actually carry body sections.
+        let body = b"Subject: hi\r\nX-Tyr-Chat: 1\r\n\r\nhello\r\n".to_vec();
+        Ok(vec![FetchedMessage {
+            seq: 1, uid: 1, flags: vec![],
+            internal_date: "01-Jan-2026 00:00:00 +0000".into(),
+            rfc822_size: body.len() as u32, body,
+        }])
+    }
     async fn store(&mut self, _: bool, _: &SeqSet, _: &StoreFlags) -> Result<Vec<StoredMessage>, ImapError> { Ok(vec![]) }
     async fn search(&mut self, _: bool, _: &SearchCriteria) -> Result<Vec<u32>, ImapError> { Ok(vec![]) }
     async fn copy(&mut self, _: bool, _: &SeqSet, _: &str) -> Result<CopyData, ImapError> {
@@ -279,4 +287,19 @@ async fn test_fetch_partial_section_parses() {
     assert!(!all.contains("BAD"), "partial FETCH must not BAD: {all}");
     assert!(all.contains("a3 OK"), "partial FETCH ok: {all}");
     assert!(all.contains("a4 OK"), "no desync after partial: {all}");
+}
+
+#[tokio::test]
+async fn test_fetch_peek_response_is_not_echoed() {
+    // RFC 3501 §7.4.2: the response item is BODY[...], never BODY.PEEK[...].
+    // Tyr's strict ImapFetcher dropped every chat mail when the server echoed .PEEK.
+    let cmd = b"a1 LOGIN test test\r\na2 SELECT INBOX\r\n\
+               a3 UID FETCH 1 (UID BODY.PEEK[])\r\n\
+               a4 NOOP\r\n";
+    let all = run_session(cmd).await.join("");
+    eprintln!("peek FETCH response: {all}");
+    assert!(all.contains("a3 OK"), "fetch ok: {all}");
+    assert!(all.contains("BODY[]"), "response must name BODY[]: {all}");
+    assert!(!all.contains("BODY.PEEK"), "response must not echo .PEEK: {all}");
+    assert!(all.contains("a4 OK"), "no desync after fetch: {all}");
 }

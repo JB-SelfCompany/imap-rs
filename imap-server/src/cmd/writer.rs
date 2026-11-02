@@ -152,11 +152,9 @@ impl<'a> FetchResponseWriter<'a> {
     /// peek mode, and partial fetches.
     pub async fn body_section(&mut self, section: &BodySection, data: &[u8]) {
         self.sep().await;
-        if section.peek {
-            self.conn.encoder.atom("BODY.PEEK").await;
-        } else {
-            self.conn.encoder.atom("BODY").await;
-        }
+        // RFC 3501 §7.4.2: FETCH responses always use BODY[...]; the .PEEK
+        // modifier is request-only and must not be echoed in the response.
+        self.conn.encoder.atom("BODY").await;
         self.conn.encoder.special(b'[').await;
 
         if !section.part.is_empty() {
