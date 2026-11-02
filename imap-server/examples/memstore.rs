@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use imap_core::error::{ImapError, ImapResult};
-use imap_core::fetch::{BodySection, FetchOptions, SectionSpecifier};
+use imap_core::fetch::FetchOptions;
 use imap_core::search::SearchCriteria;
 use imap_core::select::{AppendData, CopyData, ListData, SelectData, StatusData};
 use imap_core::store::StoreFlags;
@@ -87,100 +87,6 @@ fn now_as_imap_date() -> String {
         minute,
         second
     )
-}
-
-// ── Body section filtering ──────────────────────────────────────────────
-
-fn filter_body_section(body: &[u8], section: &BodySection) -> Vec<u8> {
-    if section.part.is_empty() && matches!(section.specifier, SectionSpecifier::None) {
-        return body.to_vec();
-    }
-
-    match &section.specifier {
-        SectionSpecifier::Header => {
-            if let Some(pos) = find_header_end(body) {
-                body[..pos].to_vec()
-            } else {
-                body.to_vec()
-            }
-        }
-        SectionSpecifier::Text => {
-            if let Some(pos) = find_header_end(body) {
-                body[pos..].to_vec()
-            } else {
-                Vec::new()
-            }
-        }
-        SectionSpecifier::HeaderFields(fields) => {
-            let headers = if let Some(pos) = find_header_end(body) {
-                &body[..pos]
-            } else {
-                body
-            };
-            let mut result = Vec::new();
-            for line in headers.split(|&b| b == b'\n') {
-                let line = if line.last() == Some(&b'\r') {
-                    &line[..line.len() - 1]
-                } else {
-                    line
-                };
-                let line_str = String::from_utf8_lossy(line);
-                for field in fields {
-                    if line_str.to_lowercase().starts_with(&field.to_lowercase()) {
-                        result.extend_from_slice(line);
-                        result.extend_from_slice(b"\r\n");
-                        break;
-                    }
-                }
-            }
-            result.extend_from_slice(b"\r\n");
-            result
-        }
-        SectionSpecifier::HeaderFieldsNot(fields) => {
-            let headers = if let Some(pos) = find_header_end(body) {
-                &body[..pos]
-            } else {
-                body
-            };
-            let mut result = Vec::new();
-            for line in headers.split(|&b| b == b'\n') {
-                let line = if line.last() == Some(&b'\r') {
-                    &line[..line.len() - 1]
-                } else {
-                    line
-                };
-                let line_str = String::from_utf8_lossy(line);
-                let mut excluded = false;
-                for field in fields {
-                    if line_str.to_lowercase().starts_with(&field.to_lowercase()) {
-                        excluded = true;
-                        break;
-                    }
-                }
-                if !excluded {
-                    result.extend_from_slice(line);
-                    result.extend_from_slice(b"\r\n");
-                }
-            }
-            result.extend_from_slice(b"\r\n");
-            result
-        }
-        SectionSpecifier::Mime | SectionSpecifier::None => body.to_vec(),
-    }
-}
-
-fn find_header_end(body: &[u8]) -> Option<usize> {
-    // Look for \r\n\r\n
-    for i in 0..body.len().saturating_sub(3) {
-        if body[i] == b'\r'
-            && body[i + 1] == b'\n'
-            && body[i + 2] == b'\r'
-            && body[i + 3] == b'\n'
-        {
-            return Some(i + 4);
-        }
-    }
-    None
 }
 
 // ── Search matching ─────────────────────────────────────────────────────
@@ -481,16 +387,8 @@ impl UserSession for MemSession {
         };
 
         for (seq, msg) in ids {
-            // Filter body sections if requested
-            let body = if _options.body_sections.is_empty() {
-                msg.body.clone()
-            } else {
-                let mut filtered = Vec::new();
-                for section in &_options.body_sections {
-                    filtered = filter_body_section(&msg.body, section);
-                }
-                filtered
-            };
+            // Full message: the server cuts each requested section from it.
+            let body = msg.body.clone();
 
             results.push(FetchedMessage {
                 seq,

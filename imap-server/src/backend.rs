@@ -31,6 +31,9 @@ pub struct FetchedMessage {
     pub flags: Vec<Flag>,
     pub internal_date: String,
     pub rfc822_size: u32,
+    /// The whole RFC 5322 message whenever any body section was requested.
+    /// Do not pre-filter: the server cuts every requested section (HEADER,
+    /// HEADER.FIELDS, TEXT, `<offset.size>`) from this one buffer.
     pub body: Vec<u8>,
 }
 

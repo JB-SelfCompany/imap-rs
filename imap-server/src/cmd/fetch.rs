@@ -120,7 +120,8 @@ pub async fn handle_fetch(conn: &mut Conn, tag: &str, uid: bool) -> ImapResult<(
             if bi > 0 || has_item {
                 conn.encoder.sp().await;
             }
-            write_body_section_response(conn, bs, &msg.body).await;
+            let data = section_bytes(&msg.body, bs);
+            write_body_section_response(conn, bs, &data).await;
             has_item = true;
         }
 
@@ -184,6 +185,74 @@ async fn write_body_section_response(conn: &mut Conn, bs: &BodySection, body: &[
         .write_raw(literal_header.as_bytes())
         .await;
     conn.encoder.write_raw(body).await;
+}
+
+/// The bytes one body section asks for, cut from the full RFC 5322 message.
+///
+/// Done here, per section, because one FETCH may ask for several sections
+/// (`BODY.PEEK[HEADER.FIELDS (..)] BODY.PEEK[TEXT]`) while a backend hands over
+/// one message. `<offset.size>` is applied last, to the section's own bytes.
+///
+/// ponytail: a MIME part path (`BODY[1.2]`) is not walked; the whole message is
+/// returned for it, as before. Add multipart navigation when a client needs it.
+pub fn section_bytes(full: &[u8], bs: &BodySection) -> Vec<u8> {
+    let split = full
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(full.len());
+    let (head, text) = full.split_at(split);
+
+    let section = if !bs.part.is_empty() {
+        full.to_vec()
+    } else {
+        match &bs.specifier {
+            SectionSpecifier::Header => head.to_vec(),
+            SectionSpecifier::Text => text.to_vec(),
+            SectionSpecifier::HeaderFields(names) => header_fields(head, names, true),
+            SectionSpecifier::HeaderFieldsNot(names) => header_fields(head, names, false),
+            SectionSpecifier::None | SectionSpecifier::Mime => full.to_vec(),
+        }
+    };
+
+    match bs.partial {
+        Some((offset, size)) => {
+            let start = (offset as usize).min(section.len());
+            let end = start.saturating_add(size as usize).min(section.len());
+            section[start..end].to_vec()
+        }
+        None => section,
+    }
+}
+
+/// Header lines whose field name is (`keep`) or is not (`!keep`) in `names`,
+/// with folded continuation lines (RFC 5322 §2.2.3) kept with their field, and
+/// the blank line that ends a header block.
+fn header_fields(head: &[u8], names: &[String], keep: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut copying = false;
+    for line in head.split_inclusive(|&b| b == b'\n') {
+        let bare = line.strip_suffix(b"\n").unwrap_or(line);
+        let bare = bare.strip_suffix(b"\r").unwrap_or(bare);
+        if bare.is_empty() {
+            break;
+        }
+        if !matches!(bare[0], b' ' | b'\t') {
+            copying = match bare.iter().position(|&b| b == b':') {
+                Some(colon) => {
+                    let name = bare[..colon].trim_ascii();
+                    names.iter().any(|n| n.as_bytes().eq_ignore_ascii_case(name)) == keep
+                }
+                None => false,
+            };
+        }
+        if copying {
+            out.extend_from_slice(bare);
+            out.extend_from_slice(b"\r\n");
+        }
+    }
+    out.extend_from_slice(b"\r\n");
+    out
 }
 
 /// Parse FETCH arguments from the decoder.

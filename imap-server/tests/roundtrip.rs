@@ -290,6 +290,34 @@ async fn test_fetch_partial_section_parses() {
 }
 
 #[tokio::test]
+async fn test_fetch_each_body_section_gets_its_own_content() {
+    // Tyr's chat asks for HEADER.FIELDS and TEXT in one FETCH. Each literal must
+    // carry its own section; the server used to repeat one body for both, so the
+    // chat showed raw headers as the message text.
+    let cmd = b"a1 LOGIN test test\r\na2 SELECT INBOX\r\n\
+               a3 UID FETCH 1 (UID BODY.PEEK[HEADER.FIELDS (SUBJECT)] BODY.PEEK[TEXT])\r\n\
+               a4 NOOP\r\n";
+    let all = run_session(cmd).await.join("");
+    eprintln!("two-section FETCH response: {all}");
+    assert!(all.contains("a3 OK"), "fetch ok: {all}");
+    let header_part = all
+        .split("BODY[HEADER.FIELDS (SUBJECT)]")
+        .nth(1)
+        .and_then(|s| s.split("BODY[TEXT]").next())
+        .expect("header section present");
+    let text_part = all
+        .split("BODY[TEXT]")
+        .nth(1)
+        .and_then(|s| s.split(')').next())
+        .expect("text section present");
+    assert!(header_part.contains("Subject: hi"), "header section has Subject: {all}");
+    assert!(!header_part.contains("X-Tyr-Chat"), "header section has only the asked fields: {all}");
+    assert!(text_part.contains("hello"), "text section has the body: {all}");
+    assert!(!text_part.contains("Subject"), "text section must not repeat headers: {all}");
+    assert!(all.contains("a4 OK"), "no desync after fetch: {all}");
+}
+
+#[tokio::test]
 async fn test_fetch_peek_response_is_not_echoed() {
     // RFC 3501 §7.4.2: the response item is BODY[...], never BODY.PEEK[...].
     // Tyr's strict ImapFetcher dropped every chat mail when the server echoed .PEEK.
